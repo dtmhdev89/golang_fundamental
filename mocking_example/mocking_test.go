@@ -3,6 +3,8 @@ package mockingexample
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -51,5 +53,18 @@ func Test_nats_ops(t *testing.T) {
 
 	if string(resp) != testingString {
 		t.Errorf("Expected %v but received '%v'", testingString, string(resp))
+	}
+}
+
+func Test_specialHandler(t *testing.T) {
+	fmt.Println("Running Test_specialHandler")
+	req := httptest.NewRequest("GET", "http://localhost:8080/foo?item=apple", nil)
+	w := httptest.NewRecorder()
+
+	specialHandler(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status code. Actual status code %v", resp.StatusCode)
 	}
 }
