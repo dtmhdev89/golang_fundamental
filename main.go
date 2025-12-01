@@ -1,13 +1,21 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
+	"os"
+	"os/signal"
+	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/example/tester/sample"
+	"github.com/fsnotify/fsnotify"
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -19,6 +27,13 @@ var variableInitialization int = 5
 
 var wg sync.WaitGroup
 var messages = make(chan string)
+var (
+	zzz = make(chan string)
+)
+
+var (
+	workers = 3
+)
 
 func main() {
 	// fmt.Println("Hello, 世界")
@@ -26,6 +41,135 @@ func main() {
 	// output, _ := temp.Marshal(map[string]string{"a": "b", "c": "d"})
 	// fmt.Println(string(output))
 	fmt.Println("Program Begin")
+
+	items := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	workers := 3
+
+	in := make(chan int)
+	out := make(chan int)
+	done := make(chan struct{}) // workers finished signal
+
+	// Start workers
+	for i := 0; i < workers; i++ {
+		go processItems3(in, out, done)
+	}
+
+	// Close output once all workers send done signals
+	go func() {
+		// Wait until all workers send to done
+		for i := 0; i < workers; i++ {
+			<-done
+		}
+		close(out)
+	}()
+
+	// Feeding items
+	go func() {
+		for _, v := range items {
+			in <- v
+		}
+		close(in) // important: tells workers to stop
+	}()
+
+	// Sum outputs (single consumer → no race)
+	total := 0
+	for v := range out {
+		fmt.Printf("Working on out: %v\n", v)
+		total += v
+	}
+
+	fmt.Printf("Final total: %d\n", total)
+
+	// items := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+
+	// var wg sync.WaitGroup
+	// wg.Add(len(items))
+	// out := make(chan int)
+	// in := make(chan int)
+
+	// sum := Sum{Total: 0}
+
+	// for i := 0; i < workers; i++ {
+	// 	go processItems(in, out, &wg)
+	// }
+
+	// for _, val := range items {
+	// 	in <- val
+	// }
+
+	// wg.Wait()
+
+	// total := 0
+
+	// for j := 0; j < len(items); j++ {
+	// 	total = total + <-out
+	// }
+
+	// fmt.Printf("Total sum is: %v\n", total)
+
+	currentConfig := readConfig()
+
+	watcher, errr := fsnotify.NewWatcher()
+	if errr != nil {
+		log.Fatal(errr)
+	}
+
+	defer watcher.Close()
+
+	watcher.Add("config.json")
+
+	for {
+		time.Sleep(1 * time.Second)
+		select {
+		case event := <-watcher.Events:
+			fmt.Printf("Event happened: %v\n", event)
+			if event.Has(fsnotify.Write) {
+				currentConfig = readConfig()
+				fmt.Println("configuration is updated")
+			}
+		default:
+			fmt.Printf("%+v\n", currentConfig)
+		}
+	}
+
+	cores := runtime.GOMAXPROCS(0)
+	fmt.Printf("Default GOMAXPROCS: %d\n", cores)
+
+	// You can also see the total number of logical CPUs
+	logicalCPUs := runtime.NumCPU()
+	fmt.Printf("Logical CPUs on system: %d\n", logicalCPUs)
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	ff, _ := os.OpenFile("test2.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	bw := bufio.NewWriter(ff)
+	iter := 0
+	expectedCounter := 0
+
+	for {
+		time.Sleep(1 * time.Second)
+		select {
+		case a := <-sigs:
+			fmt.Printf("Receive signal to end application :: %v\n", a)
+			fmt.Printf("%v items left in buffer, Flushing it \n", iter)
+			bw.Flush()
+			iter = 0
+			fmt.Printf("expected number of lines: %v\n", expectedCounter)
+			os.Exit(0)
+		default:
+			iter = iter + 1
+			fmt.Println("generated new item")
+			expectedCounter = expectedCounter + 1
+			dataVal := fmt.Sprintf("generated val: %v\n", rand.Int())
+			bw.WriteString(dataVal)
+			if iter >= 10 {
+				bw.Flush()
+				iter = 0
+			}
+		}
+	}
+
 	e := sample.ExposedStruct{
 		ExposedSample: "sample",
 		// unexposedSample: "sample",
@@ -88,6 +232,23 @@ func main() {
 	fmt.Println("MSG from ping through channel messages: ", msg)
 	fmt.Println("Return to main")
 	// time.Sleep(5 * time.Second)
+
+	// go func() {
+	// 	for j := 0; j < 3; j++ {
+	// 		time.Sleep(1 * time.Second)
+	// 		fmt.Printf("j: %v\n", j)
+	// 	}
+	// }()
+
+	// for i := 0; i < 10; i++ {
+	// 	time.Sleep(500 * time.Millisecond)
+	// 	fmt.Printf("i: %v\n", i)
+	// }
+
+	go generateData(1, zzz)
+	go generateData(2, zzz)
+
+	printer(zzz)
 
 	log.Print("Hello world sample started")
 	// http.HandleFunc("/", sample.Handler)
@@ -772,4 +933,84 @@ func fibonacciTabulate(n int) int {
 	}
 
 	return currentVal
+}
+
+func generateData(interval int, ch chan string) {
+	for {
+		time.Sleep(time.Duration(interval) * time.Second)
+		val := rand.Int()
+		ch <- fmt.Sprintf(
+			"time: %v :: interval: %d :: num: %v",
+			time.Now(), interval, val,
+		)
+	}
+}
+
+func printer(ch chan string) {
+	f, _ := os.OpenFile("test.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	bw := bufio.NewWriter(f)
+	i := 0
+
+	for {
+		bw.WriteString(<-ch + "\n")
+		i = i + 1
+		if i >= 10 {
+			bw.Flush()
+			i = 0
+			fmt.Println("data flushed into file")
+		}
+	}
+}
+
+type config struct {
+	Name string `json: "name"`
+}
+
+func readConfig() config {
+	raw, _ := os.ReadFile("config.json")
+
+	var c config
+	json.Unmarshal(raw, &c)
+
+	return c
+}
+
+func processItems(input chan int, output chan int, wg *sync.WaitGroup) {
+	for {
+		in := <-input
+		fmt.Printf("Working on input: %v\n", in)
+		time.Sleep(2 * time.Second)
+		output <- in + 1
+		// wg.Done()
+	}
+}
+
+func processItems2(input chan int, output chan int) {
+	for {
+		in := <-input
+		fmt.Printf("Working on input: %v\n", in)
+		time.Sleep(2 * time.Second)
+		output <- in + 1
+		// wg.Done()
+	}
+}
+
+type Sum struct {
+	Total int
+}
+
+func sumOutput(s *Sum, output chan int) {
+	out := <-output
+	fmt.Printf("Working on out: %v\n", out)
+	s.Total = s.Total + out
+	fmt.Printf("Current total: %v\n", s.Total)
+}
+
+func processItems3(in <-chan int, out chan<- int, done chan<- struct{}) {
+	for v := range in { // loop until input channel is closed
+		fmt.Printf("Working on input: %v\n", v)
+		time.Sleep(300 * time.Millisecond)
+		out <- v + 1
+	}
+	done <- struct{}{} // signal worker is finished
 }
